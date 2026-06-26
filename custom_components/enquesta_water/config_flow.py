@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import EnquestaAuthError, EnquestaClient, EnquestaError, normalize_base_url
 from .const import CONF_BASE_URL, CONF_METER_ID, DEFAULT_BASE_URL, DOMAIN
@@ -45,8 +46,13 @@ class EnquestaWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(f"{base_url}:{username.lower()}:{meter_id or 'default'}")
             self._abort_if_unique_id_configured()
 
+            session = async_create_clientsession(
+                self.hass,
+                auto_cleanup=False,
+                cookie_jar=aiohttp.CookieJar(unsafe=True),
+            )
             client = EnquestaClient(
-                async_get_clientsession(self.hass),
+                session,
                 username=username,
                 password=user_input[CONF_PASSWORD],
                 base_url=base_url,
@@ -69,5 +75,7 @@ class EnquestaWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if meter_id is None:
                     data[CONF_METER_ID] = snapshot.meter_id
                 return self.async_create_entry(title=f"Enquesta Water {snapshot.meter_id}", data=data)
+            finally:
+                session.detach()
 
         return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors)

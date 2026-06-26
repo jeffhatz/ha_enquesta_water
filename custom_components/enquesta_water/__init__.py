@@ -12,16 +12,22 @@ from .coordinator import EnquestaWaterCoordinator
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Enquesta Water from a config entry."""
     coordinator = EnquestaWaterCoordinator(hass, entry)
-    await coordinator.async_config_entry_first_refresh()
-
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    return True
+    try:
+        await coordinator.async_config_entry_first_refresh()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        coordinator.async_close()
+        raise
+    else:
+        return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        coordinator: EnquestaWaterCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
+        coordinator.async_close()
     return unload_ok

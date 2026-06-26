@@ -77,8 +77,23 @@ class EnquestaClient:
         if not self.username or not self.password:
             raise EnquestaAuthError("Username and password are required")
 
-        login_page = await self._request_text("get", "/app/?")
-        token = _extract_csrf_token(login_page)
+        token: str | None = None
+        login_referer = "/app/?"
+        login_errors: list[str] = []
+        for login_path in ("/app/?", "/app/login.jsp"):
+            login_page = await self._request_text("get", login_path)
+            try:
+                token = _extract_csrf_token(login_page)
+            except EnquestaParseError as err:
+                login_errors.append(f"{login_path}: {err}")
+                _LOGGER.debug("Enquesta login page at %s did not contain a CSRF token: %s", login_path, err)
+                continue
+            login_referer = login_path
+            break
+
+        if not token:
+            raise EnquestaParseError("Login CSRF token was not found; " + "; ".join(login_errors))
+
         data = {
             "jspCSRFToken": token,
             "accessCode": self.username,
@@ -90,7 +105,7 @@ class EnquestaClient:
             "post",
             "/app/capricorn?para=index",
             data=data,
-            referer="/app/?",
+            referer=login_referer,
         )
 
         if _is_login_page(response) or "Invalid" in response:
@@ -176,7 +191,18 @@ class EnquestaClient:
             headers=headers,
             raise_for_status=True,
         ) as response:
-            return await response.text()
+            text = await response.text()
+            _LOGGER.debug(
+                "Enquesta %s %s returned status=%s url=%s content_type=%s bytes=%s title=%r",
+                method.upper(),
+                path,
+                response.status,
+                response.url,
+                response.headers.get("Content-Type"),
+                len(text),
+                _extract_title(text),
+            )
+            return text
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,7 +317,7 @@ def _extract_csrf_token(html: str) -> str:
 
     title = _extract_title(html)
     detail = f" on page {title!r}" if title else ""
-    raise EnquestaParseError(f"Login CSRF token was not found{detail}")
+    raise EnquestaParseError(f"Login CSRF token was not found{detail}; {_response_fingerprint(html)}")
 
 
 class _InputValueParser(HTMLParser):
@@ -438,7 +464,13 @@ def _parse_error(message: str, html: str) -> str:
     title = _extract_title(html)
     if title:
         return f"{message} on page {title!r}"
-    return message
+    return f"{message}; {_response_fingerprint(html)}"
+
+
+def _response_fingerprint(html: str) -> str:
+    """Return a short response summary for diagnostics."""
+    snippet = re.sub(r"\s+", " ", html).strip()[:180]
+    return f"response_bytes={len(html)} response_start={snippet!r}"
 
 
 def normalize_base_url(base_url: str) -> str:

@@ -6,10 +6,12 @@ from datetime import UTC, datetime
 import logging
 from typing import Any
 
+import aiohttp
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -34,8 +36,13 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize coordinator."""
+        self.session = async_create_clientsession(
+            hass,
+            auto_cleanup=False,
+            cookie_jar=aiohttp.CookieJar(unsafe=True),
+        )
         self.client = EnquestaClient(
-            async_get_clientsession(hass),
+            self.session,
             username=entry.data[CONF_USERNAME],
             password=entry.data[CONF_PASSWORD],
             base_url=entry.data.get(CONF_BASE_URL, DEFAULT_BASE_URL),
@@ -100,3 +107,7 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
         if self._stored_usage is None:
             self._stored_usage = await self._store.async_load() or {}
         return self._stored_usage
+
+    def async_close(self) -> None:
+        """Close owned resources."""
+        self.session.detach()
