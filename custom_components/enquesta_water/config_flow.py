@@ -11,7 +11,7 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import EnquestaAuthError, EnquestaClient, EnquestaError
+from .api import EnquestaAuthError, EnquestaClient, EnquestaError, normalize_base_url
 from .const import CONF_BASE_URL, CONF_METER_ID, DEFAULT_BASE_URL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ class EnquestaWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             username = user_input[CONF_USERNAME]
-            base_url = user_input.get(CONF_BASE_URL, DEFAULT_BASE_URL).rstrip("/")
+            base_url = normalize_base_url(user_input.get(CONF_BASE_URL, DEFAULT_BASE_URL))
             meter_id = user_input.get(CONF_METER_ID) or None
 
             await self.async_set_unique_id(f"{base_url}:{username.lower()}:{meter_id or 'default'}")

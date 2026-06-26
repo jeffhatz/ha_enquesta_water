@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from html.parser import HTMLParser
 import ast
 import logging
 import re
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -67,7 +68,7 @@ class EnquestaClient:
         self._session = session
         self.username = username
         self.password = password
-        self.base_url = base_url.rstrip("/")
+        self.base_url = normalize_base_url(base_url)
         self.meter_id = meter_id
         self._logged_in = False
 
@@ -163,6 +164,8 @@ class EnquestaClient:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "User-Agent": USER_AGENT,
         }
+        if data is not None:
+            headers["Origin"] = self.base_url
         if referer:
             headers["Referer"] = urljoin(f"{self.base_url}/", referer.lstrip("/"))
 
@@ -272,10 +275,39 @@ def _hourly_form_data(html: str, meter_id: str, day: date) -> dict[str, str]:
 
 def _extract_csrf_token(html: str) -> str:
     """Extract the login CSRF token."""
-    match = re.search(r'name=["\']jspCSRFToken["\']\s+value=["\']([^"\']+)["\']', html)
-    if not match:
-        raise EnquestaParseError("Login CSRF token was not found")
-    return match.group(1)
+    parser = _InputValueParser("jspCSRFToken")
+    parser.feed(html)
+    if parser.value:
+        return parser.value
+
+    for tag in re.findall(r"<input\b[^>]*>", html, re.I):
+        if not re.search(r'\bname\s*=\s*["\']jspCSRFToken["\']', tag, re.I):
+            continue
+        match = re.search(r'\bvalue\s*=\s*["\']([^"\']+)["\']', tag, re.I)
+        if match:
+            return match.group(1)
+
+    title = _extract_title(html)
+    detail = f" on page {title!r}" if title else ""
+    raise EnquestaParseError(f"Login CSRF token was not found{detail}")
+
+
+class _InputValueParser(HTMLParser):
+    """Find the value attribute for a named input."""
+
+    def __init__(self, name: str) -> None:
+        """Initialize parser."""
+        super().__init__()
+        self._name = name.lower()
+        self.value: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Inspect input elements."""
+        if tag.lower() != "input":
+            return
+        values = {key.lower(): value for key, value in attrs if value is not None}
+        if values.get("name", "").lower() == self._name:
+            self.value = values.get("value")
 
 
 def _extract_meter_id(html: str) -> str:
@@ -383,3 +415,19 @@ def _format_us_date(value: date) -> str:
 def _is_login_page(html: str) -> bool:
     """Return true if the response is the login page."""
     return "My Account Login" in html and "login-form" in html
+
+
+def _extract_title(html: str) -> str | None:
+    """Extract an HTML title for diagnostics."""
+    match = re.search(r"<title[^>]*>\s*(.*?)\s*</title>", html, re.I | re.S)
+    if not match:
+        return None
+    return re.sub(r"\s+", " ", match.group(1)).strip()
+
+
+def normalize_base_url(base_url: str) -> str:
+    """Normalize a copied portal URL to a scheme and host."""
+    parsed = urlsplit(base_url.strip() or DEFAULT_BASE_URL)
+    if not parsed.scheme:
+        parsed = urlsplit(f"https://{base_url.strip()}")
+    return urlunsplit((parsed.scheme, parsed.netloc, "", "", "")).rstrip("/")
