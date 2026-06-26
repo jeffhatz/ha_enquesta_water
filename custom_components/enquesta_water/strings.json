@@ -1,0 +1,31 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Enquesta Water",
+        "description": "Enter your Enquesta utility portal credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password",
+          "base_url": "Portal base URL",
+          "meter_id": "Meter ID"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect or parse Enquesta usage data",
+      "invalid_auth": "Invalid authentication",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This Enquesta account is already configured"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "water_total": {
+        "name": "Water total"
+      }
+    }
+  }
+}
