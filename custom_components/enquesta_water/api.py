@@ -115,7 +115,7 @@ class EnquestaClient:
                 "/app/capricorn?para=smartMeterConsumV3&inquiryType=water&tab=WATSMCON",
             )
 
-        daily = _parse_daily_usage(daily_html)
+        daily = _parse_daily_usage(daily_html, self.meter_id)
         meter_id = self.meter_id or daily.meter_id
         latest_day = daily.latest_day
         hourly_usage: list[UsageReading] = []
@@ -201,13 +201,15 @@ class _ParsedHourlyUsage:
     total_consumption_gallons: float | None
 
 
-def _parse_daily_usage(html: str) -> _ParsedDailyUsage:
+def _parse_daily_usage(html: str, meter_id: str | None = None) -> _ParsedDailyUsage:
     """Parse the daily usage chart from a Capricorn page."""
-    meter_id = _extract_meter_id(html)
+    parsed_meter_id = _extract_meter_id(html) or meter_id
     labels = _extract_axis_labels(html)
     usage = _extract_series_data(html, r"id\s*:\s*[\"']consumptionData")
     if not labels or not usage:
-        raise EnquestaParseError("Daily usage chart was not found")
+        raise EnquestaParseError(_parse_error("Daily usage chart was not found", html))
+    if not parsed_meter_id:
+        raise EnquestaParseError(_parse_error("Meter ID was not found", html))
 
     readings = [
         UsageReading(bucket=str(label), gallons=float(value))
@@ -217,7 +219,7 @@ def _parse_daily_usage(html: str) -> _ParsedDailyUsage:
     latest_gallons = readings[-1].gallons if readings else None
 
     return _ParsedDailyUsage(
-        meter_id=meter_id,
+        meter_id=parsed_meter_id,
         daily_usage=readings,
         latest_day=latest_day,
         latest_day_gallons=latest_gallons,
@@ -310,15 +312,21 @@ class _InputValueParser(HTMLParser):
             self.value = values.get("value")
 
 
-def _extract_meter_id(html: str) -> str:
+def _extract_meter_id(html: str) -> str | None:
     """Extract selected meter ID."""
     match = re.search(r'id=["\']selectedMeterId["\'][^>]*value=["\']([^"\']+)["\']', html)
+    if match:
+        return match.group(1)
+    match = re.search(r'name=["\']selectedMeterId["\'][^>]*value=["\']([^"\']+)["\']', html)
     if match:
         return match.group(1)
     match = re.search(r"Meter ID:\s*([A-Za-z0-9_-]+)", html)
     if match:
         return match.group(1)
-    raise EnquestaParseError("Meter ID was not found")
+    match = re.search(r"\bmeterId=([A-Za-z0-9_-]+)", html)
+    if match:
+        return match.group(1)
+    return None
 
 
 def _extract_axis_labels(html: str) -> list[Any]:
@@ -423,6 +431,14 @@ def _extract_title(html: str) -> str | None:
     if not match:
         return None
     return re.sub(r"\s+", " ", match.group(1)).strip()
+
+
+def _parse_error(message: str, html: str) -> str:
+    """Build a parse error with page context."""
+    title = _extract_title(html)
+    if title:
+        return f"{message} on page {title!r}"
+    return message
 
 
 def normalize_base_url(base_url: str) -> str:
