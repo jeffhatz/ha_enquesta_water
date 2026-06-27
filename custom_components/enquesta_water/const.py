@@ -8,6 +8,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "enquesta_water"
 PLATFORMS = [Platform.SENSOR]
+HOURLY_STATISTIC_ID = f"{DOMAIN}:hourly_usage"
 
 CONF_BASE_URL = "base_url"
 CONF_METER_ID = "meter_id"

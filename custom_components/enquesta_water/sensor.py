@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, HOURLY_STATISTIC_ID
 from .coordinator import EnquestaWaterCoordinator
 
 
@@ -82,6 +82,7 @@ class EnquestaWaterSensor(CoordinatorEntity[EnquestaWaterCoordinator], SensorEnt
             "latest_day_gallons": data.latest_day_gallons,
             "daily_from": _date_iso(data.daily_from),
             "daily_to": _date_iso(data.daily_to),
+            "hourly_statistic_id": HOURLY_STATISTIC_ID,
             "daily_usage": _readings(data.daily_usage),
             "hourly_usage": _readings(data.hourly_usage),
         }
