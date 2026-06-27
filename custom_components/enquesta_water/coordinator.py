@@ -35,6 +35,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     HISTORY_BACKFILL_DAYS,
+    HISTORY_BACKFILL_MAX_CONSECUTIVE_ERRORS,
     HISTORY_BACKFILL_REQUEST_DELAY,
     HISTORY_BACKFILL_RETRY_DELAYS,
     HOURLY_STATISTIC_ID,
@@ -198,6 +199,10 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
             "latest_day": latest_day.isoformat(),
             "days_imported": 0,
             "days_skipped": 0,
+            "days_failed": 0,
+            "consecutive_failures": 0,
+            "max_consecutive_failures": HISTORY_BACKFILL_MAX_CONSECUTIVE_ERRORS,
+            "last_failed_day": None,
             "rate_limited": False,
             "retry_count": 0,
             "retry_delay_seconds": None,
@@ -230,33 +235,47 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
                         status,
                     )
                 except EnquestaError as err:
-                    status["stopped_at"] = day_key
-                    status["error"] = str(err)
-                    self._async_set_history_backfill_status(status)
+                    if self._async_record_backfill_day_failure(status, day_key, err):
+                        status["stopped_at"] = day_key
+                        _LOGGER.info(
+                            "Stopping Enquesta hourly history backfill after %s consecutive failed days at %s: %s",
+                            HISTORY_BACKFILL_MAX_CONSECUTIVE_ERRORS,
+                            day_key,
+                            err,
+                        )
+                        break
                     _LOGGER.info(
-                        "Stopping Enquesta hourly history backfill at %s: %s",
+                        "Skipping Enquesta hourly history backfill day %s: %s",
                         day_key,
                         err,
                     )
-                    break
+                    continue
                 except Exception as err:
-                    status["stopped_at"] = day_key
-                    status["error"] = str(err)
-                    self._async_set_history_backfill_status(status)
+                    if self._async_record_backfill_day_failure(status, day_key, err):
+                        status["stopped_at"] = day_key
+                        _LOGGER.info(
+                            "Stopping Enquesta hourly history backfill after %s consecutive failed days at %s",
+                            HISTORY_BACKFILL_MAX_CONSECUTIVE_ERRORS,
+                            day_key,
+                            exc_info=True,
+                        )
+                        break
                     _LOGGER.info(
-                        "Stopping Enquesta hourly history backfill at %s",
+                        "Skipping Enquesta hourly history backfill day %s",
                         day_key,
                         exc_info=True,
                     )
-                    break
+                    continue
 
+                status["consecutive_failures"] = 0
+                status["last_failed_day"] = None
+                status["error"] = None
                 hourly[day_key] = [round(reading.gallons, 3) for reading in readings]
                 status["days_imported"] += 1
                 changed = True
                 status["rate_limited"] = False
                 status["retry_delay_seconds"] = None
                 status["next_retry_at"] = None
-                status["error"] = None
                 self._async_set_history_backfill_status(status)
                 await asyncio.sleep(HISTORY_BACKFILL_REQUEST_DELAY)
             completed = True
@@ -279,6 +298,20 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
             await self._store.async_save(stored)
             if changed:
                 self._async_import_hourly_statistics(hourly)
+
+    def _async_record_backfill_day_failure(
+        self,
+        status: dict[str, Any],
+        day_key: str,
+        err: Exception,
+    ) -> bool:
+        """Record a failed historical day and return true if backfill should stop."""
+        status["days_failed"] += 1
+        status["consecutive_failures"] += 1
+        status["last_failed_day"] = day_key
+        status["error"] = str(err)
+        self._async_set_history_backfill_status(status)
+        return status["consecutive_failures"] >= HISTORY_BACKFILL_MAX_CONSECUTIVE_ERRORS
 
     async def _async_get_hourly_usage_with_backoff(
         self,
