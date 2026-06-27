@@ -77,6 +77,7 @@ class EnquestaClient:
         if not self.username or not self.password:
             raise EnquestaAuthError("Username and password are required")
 
+        self._clear_cookies()
         token: str | None = None
         login_referer = "/app/?"
         login_errors: list[str] = []
@@ -110,6 +111,9 @@ class EnquestaClient:
 
         if _is_login_page(response) or "Invalid" in response:
             raise EnquestaAuthError("Invalid Enquesta username or password")
+        if _is_session_expired(response):
+            self._logged_in = False
+            raise EnquestaAuthError("Enquesta session expired immediately after login")
 
         self._logged_in = True
 
@@ -118,17 +122,10 @@ class EnquestaClient:
         if not self._logged_in:
             await self.async_login()
 
-        daily_html = await self._request_text(
+        daily_html = await self._request_authenticated_text(
             "get",
             "/app/capricorn?para=smartMeterConsumV3&inquiryType=water&tab=WATSMCON",
         )
-        if _is_login_page(daily_html):
-            self._logged_in = False
-            await self.async_login()
-            daily_html = await self._request_text(
-                "get",
-                "/app/capricorn?para=smartMeterConsumV3&inquiryType=water&tab=WATSMCON",
-            )
 
         daily = _parse_daily_usage(daily_html, self.meter_id)
         meter_id = self.meter_id or daily.meter_id
@@ -139,7 +136,7 @@ class EnquestaClient:
 
         if latest_day:
             try:
-                hourly_html = await self._request_text(
+                hourly_html = await self._request_authenticated_text(
                     "post",
                     "/app/capricorn?para=smartMeterConsumV3&interval=hourlyUsage",
                     data=_hourly_form_data(daily_html, meter_id, latest_day),
@@ -203,6 +200,30 @@ class EnquestaClient:
                 _extract_title(text),
             )
             return text
+
+    async def _request_authenticated_text(
+        self,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, Any] | None = None,
+        referer: str | None = None,
+    ) -> str:
+        """Make a protected portal request, refreshing login once if needed."""
+        text = await self._request_text(method, path, data=data, referer=referer)
+        if not _requires_login(text):
+            return text
+
+        _LOGGER.debug("Enquesta session expired while requesting %s; refreshing login", path)
+        self._logged_in = False
+        await self.async_login()
+        return await self._request_text(method, path, data=data, referer=referer)
+
+    def _clear_cookies(self) -> None:
+        """Clear session cookies before a fresh login."""
+        cookie_jar = getattr(self._session, "cookie_jar", None)
+        if cookie_jar is not None:
+            cookie_jar.clear()
 
 
 @dataclass(frozen=True, slots=True)
@@ -449,6 +470,17 @@ def _format_us_date(value: date) -> str:
 def _is_login_page(html: str) -> bool:
     """Return true if the response is the login page."""
     return "My Account Login" in html and "login-form" in html
+
+
+def _is_session_expired(html: str) -> bool:
+    """Return true if the response is a session expired page."""
+    title = _extract_title(html)
+    return bool(title and "session expired" in title.lower()) or "Session Expired" in html
+
+
+def _requires_login(html: str) -> bool:
+    """Return true if a protected page response requires a fresh login."""
+    return _is_login_page(html) or _is_session_expired(html)
 
 
 def _extract_title(html: str) -> str | None:
