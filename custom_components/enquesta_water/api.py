@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 import ast
 import logging
@@ -28,6 +29,15 @@ class EnquestaAuthError(EnquestaError):
 
 class EnquestaParseError(EnquestaError):
     """The portal response could not be parsed."""
+
+
+class EnquestaRateLimitError(EnquestaError):
+    """The portal is rate limiting requests."""
+
+    def __init__(self, message: str, retry_after_seconds: int | None = None) -> None:
+        """Initialize rate limit error."""
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,7 +237,7 @@ class EnquestaClient:
             urljoin(f"{self.base_url}/", path.lstrip("/")),
             data=data,
             headers=headers,
-            raise_for_status=True,
+            raise_for_status=False,
         ) as response:
             text = await response.text()
             _LOGGER.debug(
@@ -240,6 +250,13 @@ class EnquestaClient:
                 len(text),
                 _extract_title(text),
             )
+            if response.status == 429 or (response.status == 503 and "Retry-After" in response.headers):
+                retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+                raise EnquestaRateLimitError(
+                    f"Enquesta rate limited request to {path}",
+                    retry_after_seconds=retry_after,
+                )
+            response.raise_for_status()
             return text
 
     async def _request_authenticated_text(
@@ -473,6 +490,24 @@ def _parse_iso_date(value: str) -> date | None:
         return date.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _retry_after_seconds(value: str | None) -> int | None:
+    """Parse a Retry-After header into seconds."""
+    if not value:
+        return None
+    try:
+        return max(0, int(value))
+    except ValueError:
+        pass
+
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    return max(0, int((retry_at - datetime.now(UTC)).total_seconds()))
 
 
 def _is_login_page(html: str) -> bool:

@@ -9,6 +9,7 @@ from typing import Any
 
 import aiohttp
 
+from homeassistant.components import persistent_notification
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData, StatisticMeanType
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.config_entries import ConfigEntry
@@ -19,7 +20,14 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .api import EnquestaAuthError, EnquestaClient, EnquestaError, UsageSnapshot
+from .api import (
+    EnquestaAuthError,
+    EnquestaClient,
+    EnquestaError,
+    EnquestaRateLimitError,
+    UsageReading,
+    UsageSnapshot,
+)
 from .const import (
     CONF_BASE_URL,
     CONF_METER_ID,
@@ -27,12 +35,16 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     HISTORY_BACKFILL_DAYS,
+    HISTORY_BACKFILL_REQUEST_DELAY,
+    HISTORY_BACKFILL_RETRY_DELAYS,
     HOURLY_STATISTIC_ID,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+BACKFILL_NOTIFICATION_ID = f"{DOMAIN}_history_backfill_rate_limited"
 
 
 class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
@@ -180,10 +192,14 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
             "latest_day": latest_day.isoformat(),
             "days_imported": 0,
             "days_skipped": 0,
+            "rate_limited": False,
+            "retry_count": 0,
+            "retry_delay_seconds": None,
+            "next_retry_at": None,
             "stopped_at": None,
             "error": None,
         }
-        self.history_backfill_status = status
+        self._async_set_history_backfill_status(status)
 
         stored = await self._async_load_store()
         account = stored.setdefault(self.config_entry.entry_id, {})
@@ -202,10 +218,15 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
                     continue
 
                 try:
-                    readings = await self.client.async_get_hourly_usage_for_day(target_day)
+                    readings = await self._async_get_hourly_usage_with_backoff(
+                        target_day,
+                        day_key,
+                        status,
+                    )
                 except EnquestaError as err:
                     status["stopped_at"] = day_key
                     status["error"] = str(err)
+                    self._async_set_history_backfill_status(status)
                     _LOGGER.info(
                         "Stopping Enquesta hourly history backfill at %s: %s",
                         day_key,
@@ -215,6 +236,7 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
                 except Exception as err:
                     status["stopped_at"] = day_key
                     status["error"] = str(err)
+                    self._async_set_history_backfill_status(status)
                     _LOGGER.info(
                         "Stopping Enquesta hourly history backfill at %s",
                         day_key,
@@ -225,7 +247,12 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
                 hourly[day_key] = [round(reading.gallons, 3) for reading in readings]
                 status["days_imported"] += 1
                 changed = True
-                await asyncio.sleep(0.05)
+                status["rate_limited"] = False
+                status["retry_delay_seconds"] = None
+                status["next_retry_at"] = None
+                status["error"] = None
+                self._async_set_history_backfill_status(status)
+                await asyncio.sleep(HISTORY_BACKFILL_REQUEST_DELAY)
             completed = True
         except asyncio.CancelledError:
             status["error"] = "Backfill was cancelled"
@@ -233,15 +260,84 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
         finally:
             status["running"] = False
             status["finished_at"] = datetime.now(UTC).isoformat()
+            status["rate_limited"] = False
+            status["retry_delay_seconds"] = None
+            status["next_retry_at"] = None
+            if mark_initial_completed and completed:
+                status["initial_completed"] = True
+            self._async_dismiss_history_backfill_notification()
+            self._async_set_history_backfill_status(status)
             history = account.setdefault("history_backfill", {})
             history.update(status)
-            if mark_initial_completed and completed:
-                history["initial_completed"] = True
-                status["initial_completed"] = True
             meter["updated_at"] = datetime.now(UTC).isoformat()
             await self._store.async_save(stored)
             if changed:
                 self._async_import_hourly_statistics(hourly)
+
+    async def _async_get_hourly_usage_with_backoff(
+        self,
+        target_day: date,
+        day_key: str,
+        status: dict[str, Any],
+    ) -> list[UsageReading]:
+        """Fetch hourly usage, retrying rate limits with increasing delays."""
+        retry_count = 0
+        while True:
+            try:
+                readings = await self.client.async_get_hourly_usage_for_day(target_day)
+            except EnquestaRateLimitError as err:
+                delay = _backfill_retry_delay(retry_count, err.retry_after_seconds)
+                retry_count += 1
+                next_retry = datetime.now(UTC) + timedelta(seconds=delay)
+                status["rate_limited"] = True
+                status["retry_count"] = retry_count
+                status["retry_delay_seconds"] = delay
+                status["next_retry_at"] = next_retry.isoformat()
+                status["error"] = str(err)
+                self._async_set_history_backfill_status(status)
+                self._async_create_history_backfill_notification(day_key, delay, retry_count)
+                _LOGGER.info(
+                    "Enquesta hourly history backfill was rate limited at %s; retrying in %s seconds",
+                    day_key,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            else:
+                if retry_count:
+                    self._async_dismiss_history_backfill_notification()
+                    status["rate_limited"] = False
+                    status["retry_delay_seconds"] = None
+                    status["next_retry_at"] = None
+                    status["error"] = None
+                    self._async_set_history_backfill_status(status)
+                return readings
+
+    def _async_set_history_backfill_status(self, status: dict[str, Any]) -> None:
+        """Update exposed history backfill status."""
+        self.history_backfill_status = dict(status)
+        self.async_update_listeners()
+
+    def _async_create_history_backfill_notification(
+        self,
+        day_key: str,
+        delay: int,
+        retry_count: int,
+    ) -> None:
+        """Create a visible rate-limit notification."""
+        persistent_notification.async_create(
+            self.hass,
+            (
+                "Enquesta hourly history backfill was rate limited while fetching "
+                f"{day_key}. It will retry in {delay} seconds. Retry #{retry_count}."
+            ),
+            title="Enquesta Water history backfill paused",
+            notification_id=BACKFILL_NOTIFICATION_ID,
+        )
+
+    def _async_dismiss_history_backfill_notification(self) -> None:
+        """Dismiss the rate-limit notification."""
+        persistent_notification.async_dismiss(self.hass, BACKFILL_NOTIFICATION_ID)
 
     def async_close(self) -> None:
         """Close owned resources."""
@@ -317,3 +413,13 @@ def _stored_hourly_statistics(
             continue
         statistics.extend(_hourly_statistics(day, hourly[day_key], timezone))
     return statistics
+
+
+def _backfill_retry_delay(retry_count: int, retry_after_seconds: int | None) -> int:
+    """Return retry delay for a backfill rate limit."""
+    schedule_delay = HISTORY_BACKFILL_RETRY_DELAYS[
+        min(retry_count, len(HISTORY_BACKFILL_RETRY_DELAYS) - 1)
+    ]
+    if retry_after_seconds is None:
+        return schedule_delay
+    return max(schedule_delay, retry_after_seconds)
