@@ -167,7 +167,9 @@ def _hourly_statistics(
     start = datetime.combine(day, time.min, tzinfo=timezone)
 
     statistics: list[StatisticData] = []
-    for hour_offset, gallons in enumerate(hourly_values):
+    # Enquesta labels hourly water buckets by the ending hour, while HA
+    # statistics render the row start time. Shift forward to match the portal.
+    for hour_offset, gallons in enumerate(hourly_values, start=1):
         value = round(gallons, 3)
         statistics.append(
             {

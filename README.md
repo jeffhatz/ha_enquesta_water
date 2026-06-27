@@ -8,11 +8,11 @@ Custom integration for Enquesta/SilverBlaze Capricorn utility portals, built fro
 - `device_class: water`
 - `state_class: total_increasing`
 - unit: `gal`
-- external statistic: `enquesta_water:hourly_usage_gallons`
+- external statistic: `enquesta_water:hourly_usage_by_portal_hour`
 
 The portal exposes interval consumption instead of a physical lifetime meter register. To make the sensor suitable for Home Assistant long-term statistics, the integration keeps a small daily usage ledger in Home Assistant storage and exposes a synthetic monotonic total. The first successful update becomes the baseline; later Enquesta daily/hourly usage increases the total.
 
-The integration also imports the latest available 24-hour usage chart into Home Assistant long-term statistics as `enquesta_water:hourly_usage_gallons`. It stores each portal hourly bucket as raw gallons for that hour, so a statistics graph card can show a native hourly bar chart without relying on an image.
+The integration also imports the latest available 24-hour usage chart into Home Assistant long-term statistics as `enquesta_water:hourly_usage_by_portal_hour`. It stores each portal hourly bucket as raw gallons at the portal's displayed hour label, so a statistics graph card can show a native hourly bar chart without relying on an image.
 
 ## Install
 
@@ -40,5 +40,5 @@ period: hour
 days_to_show: 2
 chart_type: bar
 entities:
-  - enquesta_water:hourly_usage_gallons
+  - enquesta_water:hourly_usage_by_portal_hour
 ```
