@@ -12,7 +12,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, HISTORY_BACKFILL_DAYS
 from .coordinator import EnquestaWaterCoordinator
 
 
@@ -62,7 +62,7 @@ class EnquestaBackfillHistoryButton(CoordinatorEntity[EnquestaWaterCoordinator],
 
     async def async_press(self) -> None:
         """Start a missing hourly usage history backfill."""
-        self.coordinator.async_start_history_backfill()
+        self.coordinator.async_start_history_backfill(HISTORY_BACKFILL_DAYS)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

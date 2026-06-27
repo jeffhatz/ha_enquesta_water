@@ -1,0 +1,23 @@
+backfill_hourly_history:
+  name: Backfill hourly history
+  description: Fetch missing historical hourly water usage from Enquesta.
+  fields:
+    days:
+      name: Days
+      description: Number of days to try, walking backward from the latest portal day.
+      default: 365
+      required: false
+      example: 365
+      selector:
+        number:
+          min: 1
+          max: 3650
+          mode: box
+          unit_of_measurement: days
+    config_entry_id:
+      name: Config entry ID
+      description: Optional Enquesta Water config entry ID. Leave blank to run for all loaded entries.
+      required: false
+      advanced: true
+      selector:
+        text:

@@ -150,13 +150,14 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
             self._async_initial_history_backfill()
         )
 
-    def async_start_history_backfill(self) -> None:
+    def async_start_history_backfill(self, days: int = HISTORY_BACKFILL_DAYS) -> bool:
         """Start a manual missing-history backfill."""
         if self._history_backfill_task and not self._history_backfill_task.done():
-            return
+            return False
         self._history_backfill_task = self.hass.async_create_task(
-            self._async_backfill_history(force=False)
+            self._async_backfill_history(days=days, force=False)
         )
+        return True
 
     async def _async_initial_history_backfill(self) -> None:
         """Run a one-time missing-history backfill for this config entry."""
@@ -170,11 +171,16 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
                 "days_requested": HISTORY_BACKFILL_DAYS,
             }
             return
-        await self._async_backfill_history(force=False, mark_initial_completed=True)
+        await self._async_backfill_history(
+            days=HISTORY_BACKFILL_DAYS,
+            force=False,
+            mark_initial_completed=True,
+        )
 
     async def _async_backfill_history(
         self,
         *,
+        days: int,
         force: bool,
         mark_initial_completed: bool = False,
     ) -> None:
@@ -187,7 +193,7 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
         meter_id = self.data.meter_id
         status: dict[str, Any] = {
             "running": True,
-            "days_requested": HISTORY_BACKFILL_DAYS,
+            "days_requested": days,
             "started_at": started_at.isoformat(),
             "latest_day": latest_day.isoformat(),
             "days_imported": 0,
@@ -210,7 +216,7 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
         changed = False
         completed = False
         try:
-            for day_offset in range(HISTORY_BACKFILL_DAYS):
+            for day_offset in range(days):
                 target_day = latest_day - timedelta(days=day_offset)
                 day_key = target_day.isoformat()
                 if day_key in hourly and not force:

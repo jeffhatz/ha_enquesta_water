@@ -15,7 +15,7 @@ The portal exposes interval consumption instead of a physical lifetime meter reg
 
 The integration also imports the latest available 24-hour usage chart into Home Assistant long-term statistics as `enquesta_water:hourly_usage_by_portal_hour`. It stores each portal hourly bucket as raw gallons at the portal's displayed hour label, so a statistics graph card can show a native hourly bar chart without relying on an image.
 
-On first setup, the integration starts a missing-history backfill for up to 365 days of hourly portal data. It stops when Enquesta no longer returns a usable hourly chart, which lets newer accounts backfill as far as the account actually has history. You can run the same missing-history job again with the **Backfill hourly history** button entity. Backfilled hourly statistics do not change the synthetic `water_total` sensor ledger, so the Energy dashboard total does not jump by a year of historical usage at the current time.
+On first setup, the integration starts a missing-history backfill for up to 365 days of hourly portal data. It stops when Enquesta no longer returns a usable hourly chart, which lets newer accounts backfill as far as the account actually has history. You can run the same 365-day missing-history job again with the **Backfill hourly history** button entity. To choose a different range, call the `enquesta_water.backfill_hourly_history` action and set `days` to the number of days to try. Backfilled hourly statistics do not change the synthetic `water_total` sensor ledger, so the Energy dashboard total does not jump by a year of historical usage at the current time.
 
 ## Install
 

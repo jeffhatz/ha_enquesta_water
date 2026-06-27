@@ -10,12 +10,16 @@ DOMAIN = "enquesta_water"
 PLATFORMS = [Platform.SENSOR, Platform.BUTTON]
 HOURLY_STATISTIC_ID = f"{DOMAIN}:hourly_usage_by_portal_hour"
 
+ATTR_CONFIG_ENTRY_ID = "config_entry_id"
+ATTR_DAYS = "days"
+
 CONF_BASE_URL = "base_url"
 CONF_METER_ID = "meter_id"
 
 DEFAULT_BASE_URL = "https://amocap.enquesta.io"
 DEFAULT_SCAN_INTERVAL = timedelta(hours=1)
 HISTORY_BACKFILL_DAYS = 365
+SERVICE_BACKFILL_HOURLY_HISTORY = "backfill_hourly_history"
 HISTORY_BACKFILL_REQUEST_DELAY = 0.5
 HISTORY_BACKFILL_RETRY_DELAYS = (5, 15, 30, 60, 120, 300)
 
