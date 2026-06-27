@@ -114,7 +114,7 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
             daily_from=snapshot.daily_from,
             daily_to=snapshot.daily_to,
         )
-        self._async_import_hourly_statistics(hourly, daily)
+        self._async_import_hourly_statistics(hourly)
         return updated
 
     async def _async_load_store(self) -> dict[str, Any]:
@@ -130,19 +130,18 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
     def _async_import_hourly_statistics(
         self,
         hourly: dict[str, list[float]],
-        daily: dict[str, float],
     ) -> None:
         """Import stored hourly usage as external long-term statistics."""
         if not hourly:
             return
 
-        statistics = _stored_hourly_statistics(hourly, daily, self._timezone)
+        statistics = _stored_hourly_statistics(hourly, self._timezone)
         if not statistics:
             return
 
         metadata: StatisticMetaData = {
-            "has_sum": True,
-            "mean_type": StatisticMeanType.NONE,
+            "has_sum": False,
+            "mean_type": StatisticMeanType.ARITHMETIC,
             "name": "Enquesta Water Hourly Usage",
             "source": DOMAIN,
             "statistic_id": HOURLY_STATISTIC_ID,
@@ -159,35 +158,23 @@ class EnquestaWaterCoordinator(DataUpdateCoordinator[UsageSnapshot]):
 def _hourly_statistics(
     day: date,
     hourly_values: list[float],
-    daily: dict[str, float],
     timezone: tzinfo,
 ) -> list[StatisticData]:
-    """Build cumulative hourly statistics from Enquesta hourly buckets."""
+    """Build raw hourly usage statistics from Enquesta hourly buckets."""
     if len(hourly_values) != 24:
         return []
 
-    baseline = sum(
-        gallons
-        for bucket, gallons in daily.items()
-        if bucket < day.isoformat()
-    )
     start = datetime.combine(day, time.min, tzinfo=timezone)
 
-    statistics: list[StatisticData] = [
-        {
-            "start": start,
-            "state": round(baseline, 3),
-            "sum": round(baseline, 3),
-        }
-    ]
-    running = baseline
-    for hour_offset, gallons in enumerate(hourly_values, start=1):
-        running += gallons
+    statistics: list[StatisticData] = []
+    for hour_offset, gallons in enumerate(hourly_values):
+        value = round(gallons, 3)
         statistics.append(
             {
                 "start": start + timedelta(hours=hour_offset),
-                "state": round(running, 3),
-                "sum": round(running, 3),
+                "mean": value,
+                "min": value,
+                "max": value,
             }
         )
     return statistics
@@ -195,15 +182,14 @@ def _hourly_statistics(
 
 def _stored_hourly_statistics(
     hourly: dict[str, list[float]],
-    daily: dict[str, float],
     timezone: tzinfo,
 ) -> list[StatisticData]:
-    """Build cumulative hourly statistics for all stored days."""
+    """Build raw hourly usage statistics for all stored days."""
     statistics: list[StatisticData] = []
     for day_key in sorted(hourly):
         try:
             day = date.fromisoformat(day_key)
         except ValueError:
             continue
-        statistics.extend(_hourly_statistics(day, hourly[day_key], daily, timezone))
+        statistics.extend(_hourly_statistics(day, hourly[day_key], timezone))
     return statistics
