@@ -9,7 +9,7 @@ import ast
 import logging
 import re
 from typing import Any
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -119,13 +119,7 @@ class EnquestaClient:
 
     async def async_get_usage(self) -> UsageSnapshot:
         """Fetch and parse water interval usage."""
-        if not self._logged_in:
-            await self.async_login()
-
-        daily_html = await self._request_authenticated_text(
-            "get",
-            "/app/capricorn?para=smartMeterConsumV3&inquiryType=water&tab=WATSMCON",
-        )
+        daily_html = await self.async_get_daily_usage_html()
 
         daily = _parse_daily_usage(daily_html, self.meter_id)
         meter_id = self.meter_id or daily.meter_id
@@ -136,13 +130,7 @@ class EnquestaClient:
 
         if latest_day:
             try:
-                hourly_html = await self._request_authenticated_text(
-                    "post",
-                    "/app/capricorn?para=smartMeterConsumV3&interval=hourlyUsage",
-                    data=_hourly_form_data(daily_html, meter_id, latest_day),
-                    referer="/app/capricorn?para=smartMeterConsumV3&inquiryType=water&tab=WATSMCON",
-                )
-                hourly = _parse_hourly_usage(hourly_html)
+                hourly = await self._async_get_hourly_usage_for_day(meter_id, latest_day)
             except EnquestaError:
                 _LOGGER.debug("Hourly usage parse failed; using daily chart only", exc_info=True)
             else:
@@ -162,6 +150,59 @@ class EnquestaClient:
             daily_from=daily.daily_from,
             daily_to=daily.daily_to,
         )
+
+    async def async_get_daily_usage_html(self) -> str:
+        """Fetch the daily water usage page."""
+        if not self._logged_in:
+            await self.async_login()
+
+        return await self._request_authenticated_text(
+            "get",
+            "/app/capricorn?para=smartMeterConsumV3&inquiryType=water&tab=WATSMCON",
+        )
+
+    async def async_get_hourly_usage_for_day(
+        self,
+        day: date,
+        *,
+        daily_html: str | None = None,
+    ) -> list[UsageReading]:
+        """Fetch hourly usage for a specific day."""
+        meter_id = self.meter_id
+        if not meter_id:
+            daily_html = daily_html or await self.async_get_daily_usage_html()
+            daily = _parse_daily_usage(daily_html, self.meter_id)
+            meter_id = daily.meter_id
+        elif not self._logged_in:
+            await self.async_login()
+
+        hourly = await self._async_get_hourly_usage_for_day(meter_id, day)
+        if len(hourly.hourly_usage) != 24:
+            raise EnquestaParseError(f"Hourly usage chart for {day.isoformat()} did not contain 24 buckets")
+        return hourly.hourly_usage
+
+    async def _async_get_hourly_usage_for_day(
+        self,
+        meter_id: str,
+        day: date,
+    ) -> _ParsedHourlyUsage:
+        """Fetch and parse hourly usage for a day."""
+        query = urlencode(
+            {
+                "para": "smartMeterConsumV3",
+                "type": "hourly",
+                "inquiryType": "water",
+                "day": day.isoformat(),
+                "tab": "WATSMCON",
+                "selectedMeterId": meter_id,
+            }
+        )
+        hourly_html = await self._request_authenticated_text(
+            "get",
+            f"/app/capricorn?{query}",
+            referer="/app/capricorn?para=smartMeterConsumV3&inquiryType=water&tab=WATSMCON",
+        )
+        return _parse_hourly_usage(hourly_html)
 
     async def _request_text(
         self,
@@ -292,34 +333,6 @@ def _parse_hourly_usage(html: str) -> _ParsedHourlyUsage:
         latest_day_gallons=latest_gallons,
         total_consumption_gallons=_extract_total_consumption(html),
     )
-
-
-def _hourly_form_data(html: str, meter_id: str, day: date) -> dict[str, str]:
-    """Build the form data used by the hourly interval page."""
-    from_date = _extract_hidden_date(html, "dailyFromDate") or day
-    to_date = _extract_hidden_date(html, "dailyToDate") or day
-    return {
-        "para": "smartMeterConsumV3",
-        "downloadConsumption": "",
-        "userAction": "",
-        "type": "hourly",
-        "inquiryType": "water",
-        "day": day.isoformat(),
-        "dailyFromDate": from_date.isoformat(),
-        "dailyToDate": to_date.isoformat(),
-        "tab": "WATSMCON",
-        "print": "N",
-        "intervalDropdown": "hourlyUsage",
-        "selectedMeterId": meter_id,
-        "TOU_fromDate": _format_us_date(from_date),
-        "month_from": "",
-        "day_from": "",
-        "year_from": "",
-        "TOU_toDate": _format_us_date(to_date),
-        "month_to": "",
-        "day_to": "",
-        "year_to": "",
-    }
 
 
 def _extract_csrf_token(html: str) -> str:
@@ -460,11 +473,6 @@ def _parse_iso_date(value: str) -> date | None:
         return date.fromisoformat(value)
     except ValueError:
         return None
-
-
-def _format_us_date(value: date) -> str:
-    """Format date as MM/DD/YYYY for the portal form."""
-    return value.strftime("%m/%d/%Y")
 
 
 def _is_login_page(html: str) -> bool:

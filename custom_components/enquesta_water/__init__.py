@@ -16,6 +16,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await coordinator.async_config_entry_first_refresh()
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        coordinator.async_schedule_initial_history_backfill()
     except Exception:
         hass.data[DOMAIN].pop(entry.entry_id, None)
         coordinator.async_close()

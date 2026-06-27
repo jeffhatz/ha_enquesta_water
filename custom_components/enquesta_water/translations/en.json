@@ -26,6 +26,11 @@
       "water_total": {
         "name": "Water total"
       }
+    },
+    "button": {
+      "backfill_history": {
+        "name": "Backfill hourly history"
+      }
     }
   }
 }

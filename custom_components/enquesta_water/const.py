@@ -7,7 +7,7 @@ from datetime import timedelta
 from homeassistant.const import Platform
 
 DOMAIN = "enquesta_water"
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = [Platform.SENSOR, Platform.BUTTON]
 HOURLY_STATISTIC_ID = f"{DOMAIN}:hourly_usage_by_portal_hour"
 
 CONF_BASE_URL = "base_url"
@@ -15,6 +15,7 @@ CONF_METER_ID = "meter_id"
 
 DEFAULT_BASE_URL = "https://amocap.enquesta.io"
 DEFAULT_SCAN_INTERVAL = timedelta(hours=1)
+HISTORY_BACKFILL_DAYS = 365
 
 STORAGE_KEY = f"{DOMAIN}.usage"
 STORAGE_VERSION = 1
